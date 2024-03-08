@@ -43,9 +43,6 @@ class LearnedPrompt:
 
         save_file(state_dict, path)
 
-    def nearest_token(self, token: str, k: int = 1) -> List[str]:
-        pass
-
     def __str__(self):
         return f"Name: {self.name}, Prefix: {self.prefix}, Suffix: {self.suffix}, Num Toks: {self.num_toks}"
 
@@ -135,5 +132,22 @@ class LearnedPromptModel:
         Returns:
             Tuple[float, float]: Probability of the completion given the prompt, and the probability of the completion given the base model
         """
-        print("UNIMPLEMENTED")
         pass
+
+    def nearest_tokens(self, prompt: LearnedPrompt) -> List[str]:
+        nearest_tokens = []
+        for i in range(len(prompt.embeddings)):
+            embedding = prompt.embeddings[i]
+            max_distance = 0
+            nearest_token = ""
+            for j in range(len(self.tokenizer)):
+                token = self.tokenizer.decode(j)
+                distance = torch.norm(
+                    embedding - self.model.model.embed_tokens.weight.data[j]
+                )
+                if distance > max_distance:
+                    max_distance = distance
+                    nearest_token = token
+            nearest_tokens.append(nearest_token)
+
+        return nearest_tokens
