@@ -9,6 +9,11 @@ from typing import List, Tuple
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
+class TrainConfig:
+    lr: float
+    num_epochs: int
+
+
 class LearnedPrompt:
     def __init__(
         self,
@@ -23,6 +28,7 @@ class LearnedPrompt:
         self.prefix = prefix
         self.suffix = suffix
         self.num_toks = num_toks
+        self.toks = [f"MIDDLE-{i}" for i in range(num_toks)]
 
         self.embeddings = embeddings
         self.out = out
@@ -43,6 +49,10 @@ class LearnedPrompt:
 
         save_file(state_dict, path)
 
+    def set_tensors(self, embedding: torch.tensor, out: torch.tensor):
+        self.embeddings = embedding
+        self.out = out
+
     def __str__(self):
         return f"Name: {self.name}, Prefix: {self.prefix}, Suffix: {self.suffix}, Num Toks: {self.num_toks}"
 
@@ -55,7 +65,6 @@ class LearnedPromptModel:
         self,
         model: str,
         tokenizer: str,
-        num_middle_toks: int,
         prompts: List[LearnedPrompt] = [],
     ):
         super(LearnedPromptModel, self).__init__(model)
@@ -64,11 +73,9 @@ class LearnedPromptModel:
 
         self.model = AutoModelForCausalLM.from_pretrained(model)
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-        self.num_middle_toks = num_middle_toks
-        self.middle_toks = [f"[MIDDLE-{i}]" for i in range(num_middle_toks)]
-        self.prompts: List[LearnedPrompt] = []
+        self.prompts: List[LearnedPrompt] = prompts
 
-        model.to(self.device), tokenizer.to(self.device)
+        model.to(self.device)
 
         self.vocab_size, self.d_model = self.model.lm_head.weight.shape
 
@@ -151,3 +158,100 @@ class LearnedPromptModel:
             nearest_tokens.append(nearest_token)
 
         return nearest_tokens
+
+    def train_prompt(
+        self,
+        prompt: LearnedPrompt,
+        config: TrainConfig,
+    ):
+        self.model.train()
+
+        num_addition_embeddings = len(prompt.toks)
+
+        new_embeddings = nn.Embedding(
+            self.vocab_size + num_addition_embeddings, self.d_model
+        )
+        nn.init.xavier_uniform_(new_embeddings.weight.data)
+        new_embeddings.weight.data[: self.vocab_size] = (
+            self.model.model.embed_tokens.weight.data
+        )
+        if prompt.embeddings is not None:
+            new_embeddings.weight.data[self.vocab_size :] = prompt.embeddings
+        else:
+            prompt.embeddings = new_embeddings.weight.data[self.vocab_size :]
+
+        self.model.model.embed_tokens = new_embeddings
+
+        out_temp = nn.Linear(self.d_model, self.vocab_size + num_addition_embeddings)
+        out_temp.weight.data[: self.vocab_size] = self.model.lm_head.weight.data
+
+        if prompt.out is not None:
+            out_temp.weight.data[self.vocab_size :] = prompt.out
+        else:
+            prompt.out = out_temp.weight.data[self.vocab_size :]
+
+        self.model.lm_head = out_temp
+
+        self.prompts.append(prompt)
+
+        self.tokenizer.add_tokens(prompt.toks)
+
+        lr, num_epochs = config.lr, config.num_epochs
+
+        for epoch in range(num_epochs):
+            input_str = (
+                prompt.prefix + " " + " ".join(prompt.toks) + " " + prompt.suffix
+            )
+            input = self.tokenizer.encode(input_str, return_tensors="pt")
+            input = input.to(self.device)
+
+            logits = self.model.forward(input).logits
+
+            # Adjusting the target and logits for proper loss calculation
+            target = input[:, 1:]
+            logits = logits[:, :-1, :]
+            loss = F.cross_entropy(
+                logits.view(-1, self.vocab_size + num_addition_embeddings),
+                target.view(-1),
+            )
+
+            loss.backward()
+
+            self.model.model.embed_tokens.weight.data[self.vocab_size :] -= (
+                (self.model.model.embed_tokens.weight.grad.data[self.vocab_size :]) * lr
+            )
+
+            self.model.lm_head.weight.data[self.vocab_size :] -= (
+                (self.model.lm_head.weight.grad.data[self.vocab_size :]) * lr
+            )
+
+            for param in self.model.model.parameters():
+                param.grads = None
+
+            prompt.embeddings = self.model.model.embed_tokens.weight.data[
+                self.vocab_size :
+            ]
+            prompt.out = self.model.lm_head.weight.data[self.vocab_size :]
+
+            print("Epoch:", epoch, "Loss:", loss.item())
+        return prompt
+
+
+if __name__ == "__main__":
+    model = LearnedPromptModel(
+        "mistralai/Mistral-7B-Instruct-v0.2",
+        "mistralai/Mistral-7B-Instruct-v0.2",
+    )
+
+    prompt = LearnedPrompt(
+        "test",
+        "The sky is",
+        "blue",
+        3,
+    )
+
+    config = TrainConfig(lr=0.1, num_epochs=10)
+
+    prompt = model.train_prompt(prompt, config)
+
+    print(prompt)
