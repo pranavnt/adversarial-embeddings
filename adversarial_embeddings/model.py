@@ -13,6 +13,10 @@ class TrainConfig:
     lr: float
     num_epochs: int
 
+    def __init__(self, lr, num_epochs):
+        self.lr = lr
+        self.num_epochs = num_epochs
+
 
 class LearnedPrompt:
     def __init__(
@@ -58,28 +62,21 @@ class LearnedPrompt:
 
 
 class LearnedPromptModel:
-    model: AutoModelForCausalLM = None
-    tokenizer: AutoTokenizer = None
-
     def __init__(
         self,
         model: str,
         tokenizer: str,
         prompts: List[LearnedPrompt] = [],
     ):
-        super(LearnedPromptModel, self).__init__(model)
-
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = AutoModelForCausalLM.from_pretrained(model)
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         self.prompts: List[LearnedPrompt] = prompts
 
-        model.to(self.device)
+        self.model.to(self.device)
 
         self.vocab_size, self.d_model = self.model.lm_head.weight.shape
-
-        assert self.vocab_size == len(tokenizer)
 
     def get_prompt(self, name: str) -> LearnedPrompt:
         for prompt in self.prompts:
@@ -113,17 +110,19 @@ class LearnedPromptModel:
         return output
 
     def to_base_model(self):
-        self.model.model.embed_tokens.weight = self.model.embed_tokens.weight[
-            : self.vocab_size
+        self.model.model.embed_tokens.weight.data = (
+            self.model.model.embed_tokens.weight.data[: self.vocab_size]
+        )
+        self.model.lm_head.weight.data = self.model.lm_head.weight.data[
+            self.vocab_size :
         ]
-        self.model.lm_head.weight = self.model.lm_head.weight[self.vocab_size :]
 
     def to_prompt_model(self, prompt: LearnedPrompt):
-        self.model.model.embed_tokens.weight = torch.cat(
-            (self.model.model.embed_tokens.weight, prompt.embeddings), dim=0
+        self.model.model.embed_tokens.weight.data = torch.cat(
+            (self.model.model.embed_tokens.weight.data, prompt.embeddings), dim=0
         )
-        self.model.lm_head.weight = torch.cat(
-            (self.model.lm_head.weight, prompt.out), dim=0
+        self.model.lm_head.weight.data = torch.cat(
+            (self.model.lm_head.weight.data, prompt.out), dim=0
         )
 
     def prob_completion(
@@ -172,6 +171,7 @@ class LearnedPromptModel:
             self.vocab_size + num_addition_embeddings, self.d_model
         )
         nn.init.xavier_uniform_(new_embeddings.weight.data)
+
         new_embeddings.weight.data[: self.vocab_size] = (
             self.model.model.embed_tokens.weight.data
         )
@@ -182,7 +182,9 @@ class LearnedPromptModel:
 
         self.model.model.embed_tokens = new_embeddings
 
-        out_temp = nn.Linear(self.d_model, self.vocab_size + num_addition_embeddings)
+        out_temp = nn.Linear(
+            self.d_model, self.vocab_size + num_addition_embeddings, bias=False
+        )
         out_temp.weight.data[: self.vocab_size] = self.model.lm_head.weight.data
 
         if prompt.out is not None:
@@ -191,6 +193,8 @@ class LearnedPromptModel:
             prompt.out = out_temp.weight.data[self.vocab_size :]
 
         self.model.lm_head = out_temp
+
+        self.model.to(self.device)
 
         self.prompts.append(prompt)
 
@@ -238,16 +242,16 @@ class LearnedPromptModel:
 
 
 if __name__ == "__main__":
-    model = LearnedPromptModel(
-        "mistralai/Mistral-7B-Instruct-v0.2",
-        "mistralai/Mistral-7B-Instruct-v0.2",
-    )
-
     prompt = LearnedPrompt(
         "test",
         "The sky is",
         "blue",
         3,
+    )
+
+    model = LearnedPromptModel(
+        "mistralai/Mistral-7B-Instruct-v0.2",
+        "mistralai/Mistral-7B-Instruct-v0.2",
     )
 
     config = TrainConfig(lr=0.1, num_epochs=10)
