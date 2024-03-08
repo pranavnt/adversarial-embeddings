@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from .data import MCQDataset
+from data import MCQDataset
 
 from typing import List, Tuple
 
@@ -43,7 +43,7 @@ model.to(device)
 
 for epoch in range(NUM_EPOCHS):
     for mcq in dataset:
-        prompt = dataset.few_shot_prompt() + mcq + " ".join(middle_tokens)
+        prompt = dataset.few_shot_prompt() + str(mcq) + " ".join(middle_tokens)
         input = tokenizer.encode(prompt, return_tensors="pt")
         input = input.to(device)
 
