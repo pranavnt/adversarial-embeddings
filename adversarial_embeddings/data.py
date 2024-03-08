@@ -15,6 +15,8 @@ class MCQ:
             letter = chr(97 + idx)
             q += f"\n{letter}) {choice}"
 
+        q += "\nAnswer: "
+
         return q
 
     @staticmethod
@@ -61,3 +63,9 @@ class MCQDataset:
 
     def __iter__(self):
         return iter(self.mcqs)
+
+
+if __name__ == "__main__":
+    mcq_dataset = MCQDataset("./data/train.jsonl", few_shot=True)
+
+    print(mcq_dataset.few_shot_prompt())
