@@ -64,6 +64,11 @@ class MCQDataset:
     def __iter__(self):
         return iter(self.mcqs)
 
+    def batched_iter_prompts(self, batch_size: int) -> List[List[MCQ]]:
+        return [
+            self.mcqs[i : i + batch_size] for i in range(0, len(self.mcqs), batch_size)
+        ]
+
 
 if __name__ == "__main__":
     mcq_dataset = MCQDataset("./data/train.jsonl", few_shot=True)

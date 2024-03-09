@@ -19,6 +19,7 @@ D_MODEL = 4096
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 dataset = MCQDataset("./data/train.jsonl", few_shot=True)
+testset = MCQDataset("./data/test.jsonl", few_shot=True)
 
 model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -40,6 +41,47 @@ model.model.embed_tokens = new_embeddings
 model.lm_head = out_temp
 
 model.to(device)
+
+
+def benchmark():
+    correct = 0
+    for idx in range(len(testset)):
+        answer, correct_answer = sample(idx, dataset=testset)
+        if answer == correct_answer:
+            correct += 1
+        print(f"Correct: {correct}/{idx + 1}", end="\r")
+    return correct / len(testset)
+
+
+def sample(idx, dataset=dataset):
+    model.eval()
+    prompt = (
+        " ".join(middle_tokens)
+        + " "
+        + dataset.few_shot_prompt()
+        + " "
+        + str(dataset[idx])
+    )
+    input = tokenizer.encode(prompt, return_tensors="pt")
+    input = input.to(device)
+
+    preds = model.generate(
+        input,
+        do_sample=True,
+        max_new_tokens=1,
+        eos_token_id=2,
+    )
+
+    words = tokenizer.batch_decode(preds)[0]
+
+    answer = words.split()[-1]
+    correct_answer = dataset[idx].correct
+
+    return answer, correct_answer
+
+
+print(benchmark())
+exit()
 
 for epoch in range(NUM_EPOCHS):
     for mcq in dataset:
